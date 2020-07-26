@@ -131,6 +131,7 @@ Simply put the dependency coordinates to your `pom.xml` (or something similar, i
 |1.3.0 |1.12.3 |8.0.1
 |1.3.1 |1.13.0 |9.0.2
 |1.3.3 |1.13.0 |10.0.2
+|1.4.0 |1.15.0 |11.0.0
 
 _There might also be other possible version configurations which will work._
 

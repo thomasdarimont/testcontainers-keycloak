@@ -1,17 +1,19 @@
 package dasniko.testcontainers.keycloak;
 
+import com.github.dockerjava.api.command.InspectContainerResponse;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.SelinuxContext;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.MountableFile;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * @author Niko Köbler, https://www.n-k.de, @dasniko
@@ -42,6 +44,9 @@ public class KeycloakContainer extends GenericContainer<KeycloakContainer> {
     private boolean useTls = false;
 
     private String extensionClassLocation;
+
+    private static final Transferable WILDFLY_DEPLOYMENT_TRIGGER_FILE_CONTENT = Transferable.of("true".getBytes(StandardCharsets.UTF_8));
+    private Set<String> wildflyDeploymentTriggerFiles = new HashSet<>();
 
     public KeycloakContainer() {
         this(KEYCLOAK_IMAGE + ":" + KEYCLOAK_VERSION);
@@ -120,33 +125,40 @@ public class KeycloakContainer extends GenericContainer<KeycloakContainer> {
             return;
         }
 
-        String uniqueExtensionNameForExtensionClassFolder = extensionClassFolder.hashCode() + "-" + extensionName;
-        String explodedFolderExtensionsJar = deploymentLocation + "/" + uniqueExtensionNameForExtensionClassFolder;
+        String explodedFolderName = extensionClassFolder.hashCode() + "-" + extensionName;
+        String explodedFolderExtensionsJar = deploymentLocation + "/" + explodedFolderName;
         addFileSystemBind(classesLocation, explodedFolderExtensionsJar, BindMode.READ_WRITE, SelinuxContext.SINGLE);
 
         boolean wildflyDeployment = deploymentLocation.contains("/standalone/deployments");
         if (wildflyDeployment) {
-            createDeploymentTriggerFileForWildfly(deploymentLocation, uniqueExtensionNameForExtensionClassFolder);
+            registerWildflyDeploymentTriggerFile(deploymentLocation, explodedFolderName);
+            // wait for extension deployment
+            waitingFor(Wait.forLogMessage(".* Deployed \"" + explodedFolderName + "\" .*",1));
         }
     }
 
-    private void createDeploymentTriggerFileForWildfly(String deploymentLocation, String uniqueExtensionNameForExtensionClassFolder) {
-        
-        String deploymentTriggerFileName = uniqueExtensionNameForExtensionClassFolder + ".dodeploy";
-        try {
-            File tmpdir = Files.createTempDirectory("kc-tc-deploy").toFile();
+    /**
+     * Registers a {@code extensions.jar.dodeploy} file to be created at container startup.
+     * @param deploymentLocation
+     * @param extensionArtifact
+     */
+    private void registerWildflyDeploymentTriggerFile(String deploymentLocation, String extensionArtifact) {
+        String triggerFileName = extensionArtifact + ".dodeploy";
+        wildflyDeploymentTriggerFiles.add(deploymentLocation + "/"+ triggerFileName);
+    }
 
-            // Refactor once test-containers support mounting a string as file
-            File deploymentTriggerFile = Files.createFile(tmpdir.toPath().resolve(deploymentTriggerFileName)).toFile();
-            // make the file writeable by anyone, so that the non-root jboss user can remove it
-            deploymentTriggerFile.setWritable(true, false);
-            deploymentTriggerFile.deleteOnExit();
-            Files.write(deploymentTriggerFile.toPath(), "true".getBytes(StandardCharsets.UTF_8));
+    @Override
+    protected void containerIsStarting(InspectContainerResponse containerInfo) {
+        createWildflyDeploymentTriggerFiles();
+    }
 
-            withFileSystemBind(tmpdir.getAbsolutePath(), deploymentLocation, BindMode.READ_WRITE);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not create extensions deployment trigger file", e);
-        }
+    /**
+     * Creates a new Wildfly {@code extensions.jar.dodeploy} deployment trigger file to ensure the exploded extension
+     * folder is deployed on container startup.
+     */
+    private void createWildflyDeploymentTriggerFiles() {
+        wildflyDeploymentTriggerFiles.forEach(deploymentTriggerFile ->
+            copyFileToContainer(WILDFLY_DEPLOYMENT_TRIGGER_FILE_CONTENT, deploymentTriggerFile));
     }
 
     protected String resolveExtensionClassLocation(String extensionClassFolder) {
